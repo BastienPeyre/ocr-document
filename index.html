@@ -126,33 +126,36 @@
         
         .info-overlay {
             position: absolute;
-            border: 2px solid #ff6b6b;
+            border: 3px solid #ff6b6b;
             background: rgba(255, 107, 107, 0.15);
             pointer-events: none;
             transition: all 0.3s ease;
             z-index: 10;
             cursor: pointer;
+            box-sizing: border-box;
         }
         
         .info-overlay.highlighted {
             border-color: #28a745;
             background: rgba(40, 167, 69, 0.25);
             box-shadow: 0 0 15px rgba(40, 167, 69, 0.5);
-            border-width: 3px;
+            border-width: 4px;
         }
         
         .info-overlay-label {
             position: absolute;
-            top: -25px;
+            top: -30px;
             left: 0;
             background: #333;
             color: white;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 10px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
             white-space: nowrap;
             opacity: 0;
             transition: opacity 0.3s ease;
+            z-index: 15;
         }
         
         .info-overlay.highlighted .info-overlay-label {
@@ -462,6 +465,7 @@
         let currentScale = 1.2;
         let pdfCanvas = null;
         let pdfContext = null;
+        let currentViewport = null;
         
         $(document).ready(function() {
             initializeEventListeners();
@@ -675,6 +679,7 @@
             
             currentPDF.getPage(currentPage).then(function(page) {
                 const viewport = page.getViewport({scale: currentScale});
+                currentViewport = viewport;
                 
                 pdfCanvas.height = viewport.height;
                 pdfCanvas.width = viewport.width;
@@ -770,31 +775,32 @@
         
         function simulateAnalysisResponse() {
             // Simulation d'une réponse API pour la démo
+            // Coordonnées ajustées pour un PDF standard A4 (dimensions approximatives)
             const simulatedResults = [
                 {
                     type: 'Date de chargement',
                     value: '15/03/2024',
-                    coordinates: { x: 120, y: 150, width: 100, height: 20 }
+                    coordinates: { x: 100, y: 120, width: 80, height: 15 }
                 },
                 {
                     type: 'Lieu de chargement',
                     value: 'Entrepôt Lyon Nord',
-                    coordinates: { x: 80, y: 200, width: 180, height: 25 }
+                    coordinates: { x: 80, y: 180, width: 140, height: 20 }
                 },
                 {
                     type: 'Transporteur',
                     value: 'TRANSPORT SAVOIE SAS',
-                    coordinates: { x: 300, y: 100, width: 200, height: 20 }
+                    coordinates: { x: 300, y: 90, width: 150, height: 18 }
                 },
                 {
                     type: 'Numéro de commande',
                     value: 'CMD-2024-001547',
-                    coordinates: { x: 400, y: 250, width: 150, height: 18 }
+                    coordinates: { x: 250, y: 200, width: 120, height: 15 }
                 },
                 {
                     type: 'Poids total',
                     value: '1,850 kg',
-                    coordinates: { x: 150, y: 300, width: 80, height: 20 }
+                    coordinates: { x: 400, y: 150, width: 60, height: 15 }
                 }
             ];
             
@@ -845,24 +851,26 @@
             $('.info-overlay').remove();
             
             const pageContainer = $('#pdfPageContainer');
-            if (pageContainer.length === 0) return;
+            const canvas = $('#pdfCanvas');
+            
+            if (pageContainer.length === 0 || !currentViewport) return;
+            
+            // Obtenir les dimensions du canvas
+            const canvasRect = canvas[0].getBoundingClientRect();
+            const containerRect = pageContainer[0].getBoundingClientRect();
             
             results.forEach((result, index) => {
                 if (result.coordinates) {
-                    // Ajuster les coordonnées selon le scale actuel
-                    const scaledCoords = {
-                        x: result.coordinates.x * currentScale,
-                        y: result.coordinates.y * currentScale,
-                        width: result.coordinates.width * currentScale,
-                        height: result.coordinates.height * currentScale
-                    };
+                    // Transformer les coordonnées du système PDF vers le système DOM
+                    // Les coordonnées PDF peuvent être dans un système différent
+                    const transformedCoords = transformPDFCoordinates(result.coordinates, currentViewport);
                     
                     const overlay = $(`
                         <div class="info-overlay" data-index="${index}" style="
-                            left: ${scaledCoords.x}px;
-                            top: ${scaledCoords.y}px;
-                            width: ${scaledCoords.width}px;
-                            height: ${scaledCoords.height}px;
+                            left: ${transformedCoords.x}px;
+                            top: ${transformedCoords.y}px;
+                            width: ${transformedCoords.width}px;
+                            height: ${transformedCoords.height}px;
                         ">
                             <div class="info-overlay-label">${result.type}</div>
                         </div>
@@ -871,6 +879,19 @@
                     pageContainer.append(overlay);
                 }
             });
+        }
+        
+        function transformPDFCoordinates(coords, viewport) {
+            // Transformer les coordonnées selon le viewport PDF.js
+            // PDF.js utilise un système de coordonnées avec l'origine en bas à gauche
+            // Nous devons les convertir vers le système DOM (origine en haut à gauche)
+            
+            return {
+                x: coords.x * currentScale,
+                y: (viewport.height - coords.y - coords.height) * currentScale / currentScale + (coords.y * currentScale),
+                width: coords.width * currentScale,
+                height: coords.height * currentScale
+            };
         }
         
         function displayImageOverlays(results) {
