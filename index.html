@@ -104,6 +104,14 @@
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
         }
         
+        .annotation-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 10;
+        }
+        
         .file-preview {
             max-width: 100%;
             max-height: 400px;
@@ -465,7 +473,10 @@
         let currentScale = 1.2;
         let pdfCanvas = null;
         let pdfContext = null;
+        let annotationCanvas = null;
+        let annotationContext = null;
         let currentViewport = null;
+        let highlightedIndex = -1;
         
         $(document).ready(function() {
             initializeEventListeners();
@@ -629,6 +640,7 @@
                     <div class="pdf-viewer" id="pdfViewer">
                         <div class="pdf-page-container" id="pdfPageContainer">
                             <canvas id="pdfCanvas" class="pdf-canvas"></canvas>
+                            <canvas id="annotationCanvas" class="annotation-canvas"></canvas>
                         </div>
                     </div>
                 </div>
@@ -669,9 +681,22 @@
                 }
             });
             
-            // Initialiser le canvas
+            // Initialiser les canvas
             pdfCanvas = document.getElementById('pdfCanvas');
             pdfContext = pdfCanvas.getContext('2d');
+            annotationCanvas = document.getElementById('annotationCanvas');
+            annotationContext = annotationCanvas.getContext('2d');
+            
+            // Event listeners pour les interactions avec les annotations
+            $(annotationCanvas).on('mousemove', function(e) {
+                handleAnnotationMouseMove(e);
+            });
+            
+            $(annotationCanvas).on('mouseleave', function() {
+                highlightedIndex = -1;
+                drawAnnotations();
+                $('.result-item').removeClass('highlighted');
+            });
         }
         
         function renderPDFPage() {
@@ -681,8 +706,11 @@
                 const viewport = page.getViewport({scale: currentScale});
                 currentViewport = viewport;
                 
+                // Redimensionner les canvas
                 pdfCanvas.height = viewport.height;
                 pdfCanvas.width = viewport.width;
+                annotationCanvas.height = viewport.height;
+                annotationCanvas.width = viewport.width;
                 
                 const renderContext = {
                     canvasContext: pdfContext,
@@ -690,12 +718,107 @@
                 };
                 
                 page.render(renderContext).promise.then(function() {
-                    // Redessiner les overlays après le rendu
+                    // Redessiner les annotations après le rendu
                     if (currentResults.length > 0) {
-                        displayPDFOverlays(currentResults);
+                        drawAnnotations();
                     }
                 });
             });
+        }
+        
+        function drawAnnotations() {
+            if (!annotationContext || !currentResults.length) return;
+            
+            // Effacer le canvas d'annotations
+            annotationContext.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+            
+            // Dessiner chaque annotation
+            currentResults.forEach((result, index) => {
+                if (result.coordinates) {
+                    const isHighlighted = highlightedIndex === index;
+                    drawAnnotationRect(result.coordinates, index, isHighlighted);
+                }
+            });
+        }
+        
+        function drawAnnotationRect(coords, index, isHighlighted) {
+            const ctx = annotationContext;
+            
+            // Couleurs selon l'état
+            const borderColor = isHighlighted ? '#28a745' : '#ff6b6b';
+            const fillColor = isHighlighted ? 'rgba(40, 167, 69, 0.25)' : 'rgba(255, 107, 107, 0.15)';
+            const lineWidth = isHighlighted ? 4 : 3;
+            
+            // Dessiner le rectangle
+            ctx.strokeStyle = borderColor;
+            ctx.fillStyle = fillColor;
+            ctx.lineWidth = lineWidth;
+            
+            ctx.fillRect(coords.x, coords.y, coords.width, coords.height);
+            ctx.strokeRect(coords.x, coords.y, coords.width, coords.height);
+            
+            // Dessiner le label si mis en évidence
+            if (isHighlighted) {
+                const result = currentResults[index];
+                drawAnnotationLabel(ctx, coords, result.type, borderColor);
+            }
+        }
+        
+        function drawAnnotationLabel(ctx, coords, text, color) {
+            const padding = 8;
+            const fontSize = 12;
+            
+            ctx.font = `${fontSize}px Arial, sans-serif`;
+            ctx.fillStyle = color;
+            
+            const textWidth = ctx.measureText(text).width;
+            const labelWidth = textWidth + padding * 2;
+            const labelHeight = fontSize + padding;
+            
+            // Position du label (au-dessus du rectangle)
+            const labelX = coords.x;
+            const labelY = coords.y - labelHeight - 5;
+            
+            // Dessiner le fond du label
+            ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
+            
+            // Dessiner le texte
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(text, labelX + padding, labelY + fontSize + padding / 2);
+        }
+        
+        function handleAnnotationMouseMove(e) {
+            if (!currentResults.length) return;
+            
+            const rect = annotationCanvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            // Vérifier si la souris est sur une annotation
+            let foundIndex = -1;
+            for (let i = 0; i < currentResults.length; i++) {
+                const coords = currentResults[i].coordinates;
+                if (coords && 
+                    x >= coords.x && 
+                    x <= coords.x + coords.width &&
+                    y >= coords.y && 
+                    y <= coords.y + coords.height) {
+                    foundIndex = i;
+                    break;
+                }
+            }
+            
+            // Mettre à jour l'affichage si nécessaire
+            if (foundIndex !== highlightedIndex) {
+                highlightedIndex = foundIndex;
+                drawAnnotations();
+                
+                // Synchroniser avec les résultats
+                $('.result-item').removeClass('highlighted');
+                if (foundIndex >= 0) {
+                    $(`.result-item[data-index="${foundIndex}"]`).addClass('highlighted');
+                }
+            }
         }
         
         function updateZoomDisplay() {
@@ -775,7 +898,6 @@
         
         function simulateAnalysisResponse() {
             // Simulation d'une réponse API pour la démo
-            // Coordonnées ajustées pour un PDF standard A4 (dimensions approximatives)
             const simulatedResults = [
                 {
                     type: 'Date de chargement',
@@ -835,51 +957,15 @@
                 resultsContainer.append(resultItem);
             });
             
-            // Afficher les overlays sur la prévisualisation
+            // Afficher les annotations
             if (selectedFile && selectedFile.type === 'application/pdf') {
-                displayPDFOverlays(results);
+                drawAnnotations();
             } else {
                 displayImageOverlays(results);
             }
             
             // Ajouter les événements de survol
             setupHoverEvents();
-        }
-        
-        function displayPDFOverlays(results) {
-            // Supprimer les overlays existants
-            $('.info-overlay').remove();
-            
-            const pageContainer = $('#pdfPageContainer');
-            const canvas = $('#pdfCanvas');
-            
-            if (pageContainer.length === 0 || !currentViewport) return;
-            
-            results.forEach((result, index) => {
-                if (result.coordinates) {
-                    // Utiliser directement les coordonnées en pixels du canvas
-                    // Assumer que les coordonnées API sont déjà dans le bon format
-                    const transformedCoords = {
-                        x: result.coordinates.x,
-                        y: result.coordinates.y,
-                        width: result.coordinates.width,
-                        height: result.coordinates.height
-                    };
-                    
-                    const overlay = $(`
-                        <div class="info-overlay" data-index="${index}" style="
-                            left: ${transformedCoords.x}px;
-                            top: ${transformedCoords.y}px;
-                            width: ${transformedCoords.width}px;
-                            height: ${transformedCoords.height}px;
-                        ">
-                            <div class="info-overlay-label">${result.type}</div>
-                        </div>
-                    `);
-                    
-                    pageContainer.append(overlay);
-                }
-            });
         }
         
         function displayImageOverlays(results) {
@@ -912,16 +998,32 @@
             $('.result-item').on('mouseenter', function() {
                 const index = $(this).data('index');
                 $(this).addClass('highlighted');
-                $(`.info-overlay[data-index="${index}"]`).addClass('highlighted');
+                
+                if (selectedFile && selectedFile.type === 'application/pdf') {
+                    // Mettre à jour l'annotation canvas
+                    highlightedIndex = index;
+                    drawAnnotations();
+                } else {
+                    // Mettre à jour les overlays HTML
+                    $(`.info-overlay[data-index="${index}"]`).addClass('highlighted');
+                }
             });
             
             $('.result-item').on('mouseleave', function() {
                 const index = $(this).data('index');
                 $(this).removeClass('highlighted');
-                $(`.info-overlay[data-index="${index}"]`).removeClass('highlighted');
+                
+                if (selectedFile && selectedFile.type === 'application/pdf') {
+                    // Réinitialiser l'annotation canvas
+                    highlightedIndex = -1;
+                    drawAnnotations();
+                } else {
+                    // Réinitialiser les overlays HTML
+                    $(`.info-overlay[data-index="${index}"]`).removeClass('highlighted');
+                }
             });
             
-            // Survol des overlays
+            // Survol des overlays pour les images
             $(document).on('mouseenter', '.info-overlay', function() {
                 const index = $(this).data('index');
                 $(this).addClass('highlighted');
