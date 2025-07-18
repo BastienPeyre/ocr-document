@@ -67,6 +67,43 @@
             background: linear-gradient(145deg, #e8f5e8, #f0fff0);
         }
         
+        .pdf-viewer-container {
+            position: relative;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            background: #f8f9fa;
+            overflow: hidden;
+        }
+        
+        .pdf-controls {
+            background: #fff;
+            padding: 10px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: center;
+        }
+        
+        .pdf-viewer {
+            position: relative;
+            overflow: auto;
+            max-height: 400px;
+            background: #fff;
+            text-align: center;
+        }
+        
+        .pdf-page-container {
+            position: relative;
+            display: inline-block;
+            margin: 10px;
+        }
+        
+        .pdf-canvas {
+            display: block;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
         .file-preview {
             max-width: 100%;
             max-height: 400px;
@@ -82,12 +119,6 @@
             display: block;
         }
         
-        .file-preview canvas {
-            width: 100%;
-            height: auto;
-            display: block;
-        }
-        
         .preview-container {
             position: relative;
             display: inline-block;
@@ -96,16 +127,36 @@
         .info-overlay {
             position: absolute;
             border: 2px solid #ff6b6b;
-            background: rgba(255, 107, 107, 0.1);
+            background: rgba(255, 107, 107, 0.15);
             pointer-events: none;
             transition: all 0.3s ease;
             z-index: 10;
+            cursor: pointer;
         }
         
         .info-overlay.highlighted {
             border-color: #28a745;
-            background: rgba(40, 167, 69, 0.2);
-            box-shadow: 0 0 10px rgba(40, 167, 69, 0.5);
+            background: rgba(40, 167, 69, 0.25);
+            box-shadow: 0 0 15px rgba(40, 167, 69, 0.5);
+            border-width: 3px;
+        }
+        
+        .info-overlay-label {
+            position: absolute;
+            top: -25px;
+            left: 0;
+            background: #333;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            white-space: nowrap;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .info-overlay.highlighted .info-overlay-label {
+            opacity: 1;
         }
         
         .result-item {
@@ -222,6 +273,38 @@
             height: 100%;
         }
         
+        .zoom-controls {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .zoom-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .zoom-btn:hover {
+            background: #5a67d8;
+        }
+        
+        .zoom-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .page-info {
+            font-size: 12px;
+            color: #666;
+            margin: 0 10px;
+        }
+        
         @media (max-width: 768px) {
             .top-row, .bottom-row {
                 height: auto;
@@ -230,6 +313,11 @@
             .section-card {
                 height: auto;
                 margin-bottom: 20px;
+            }
+            
+            .pdf-controls {
+                flex-wrap: wrap;
+                gap: 5px;
             }
         }
     </style>
@@ -359,13 +447,21 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     
     <script>
+        // Configuration PDF.js
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        
         // Configuration
         const API_ENDPOINT = 'https://your-api-endpoint.com/analyze'; // Remplacez par votre endpoint
         
         // Variables globales
         let selectedFile = null;
         let currentResults = [];
-        let previewScale = 1;
+        let currentPDF = null;
+        let currentPage = 1;
+        let totalPages = 0;
+        let currentScale = 1.2;
+        let pdfCanvas = null;
+        let pdfContext = null;
         
         $(document).ready(function() {
             initializeEventListeners();
@@ -459,7 +555,7 @@
                 const previewContainer = $('#previewContainer');
                 
                 if (file.type === 'application/pdf') {
-                    previewPDF(e.target.result);
+                    loadPDFPreview(e.target.result);
                 } else {
                     previewImage(e.target.result);
                 }
@@ -478,7 +574,7 @@
             previewContainer.empty().append(container);
         }
         
-        function previewPDF(dataUrl) {
+        function loadPDFPreview(dataUrl) {
             const base64 = dataUrl.split(',')[1];
             const binaryString = atob(base64);
             const bytes = new Uint8Array(binaryString.length);
@@ -487,29 +583,124 @@
                 bytes[i] = binaryString.charCodeAt(i);
             }
             
-            pdfjsLib.getDocument({data: bytes}).promise.then(function(pdf) {
-                pdf.getPage(1).then(function(page) {
-                    const scale = 1.5;
-                    const viewport = page.getViewport({scale: scale});
-                    
-                    const canvas = document.createElement('canvas');
-                    const context = canvas.getContext('2d');
-                    canvas.height = viewport.height;
-                    canvas.width = viewport.width;
-                    
-                    const renderContext = {
-                        canvasContext: context,
-                        viewport: viewport
-                    };
-                    
-                    page.render(renderContext).promise.then(function() {
-                        const previewContainer = $('#previewContainer');
-                        const container = $('<div>').addClass('preview-container');
-                        container.append(canvas);
-                        previewContainer.empty().append(container);
-                    });
+            const loadingTask = pdfjsLib.getDocument({data: bytes});
+            loadingTask.promise.then(function(pdf) {
+                currentPDF = pdf;
+                totalPages = pdf.numPages;
+                currentPage = 1;
+                
+                createPDFViewer();
+                renderPDFPage();
+            }).catch(function(error) {
+                console.error('Error loading PDF:', error);
+                showError('Erreur lors du chargement du PDF.');
+            });
+        }
+        
+        function createPDFViewer() {
+            const previewContainer = $('#previewContainer');
+            
+            const pdfContainer = $(`
+                <div class="pdf-viewer-container">
+                    <div class="pdf-controls">
+                        <div class="zoom-controls">
+                            <button class="zoom-btn" id="zoomOut">
+                                <i class="fas fa-search-minus"></i>
+                            </button>
+                            <span class="page-info" id="zoomLevel">${Math.round(currentScale * 100)}%</span>
+                            <button class="zoom-btn" id="zoomIn">
+                                <i class="fas fa-search-plus"></i>
+                            </button>
+                        </div>
+                        <div class="page-controls">
+                            <button class="zoom-btn" id="prevPage" ${currentPage <= 1 ? 'disabled' : ''}>
+                                <i class="fas fa-chevron-left"></i>
+                            </button>
+                            <span class="page-info" id="pageInfo">Page ${currentPage} / ${totalPages}</span>
+                            <button class="zoom-btn" id="nextPage" ${currentPage >= totalPages ? 'disabled' : ''}>
+                                <i class="fas fa-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="pdf-viewer" id="pdfViewer">
+                        <div class="pdf-page-container" id="pdfPageContainer">
+                            <canvas id="pdfCanvas" class="pdf-canvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+            `);
+            
+            previewContainer.empty().append(pdfContainer);
+            
+            // Event listeners pour les contrôles
+            $('#zoomIn').on('click', function() {
+                if (currentScale < 3) {
+                    currentScale += 0.2;
+                    renderPDFPage();
+                    updateZoomDisplay();
+                }
+            });
+            
+            $('#zoomOut').on('click', function() {
+                if (currentScale > 0.5) {
+                    currentScale -= 0.2;
+                    renderPDFPage();
+                    updateZoomDisplay();
+                }
+            });
+            
+            $('#prevPage').on('click', function() {
+                if (currentPage > 1) {
+                    currentPage--;
+                    renderPDFPage();
+                    updatePageControls();
+                }
+            });
+            
+            $('#nextPage').on('click', function() {
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    renderPDFPage();
+                    updatePageControls();
+                }
+            });
+            
+            // Initialiser le canvas
+            pdfCanvas = document.getElementById('pdfCanvas');
+            pdfContext = pdfCanvas.getContext('2d');
+        }
+        
+        function renderPDFPage() {
+            if (!currentPDF) return;
+            
+            currentPDF.getPage(currentPage).then(function(page) {
+                const viewport = page.getViewport({scale: currentScale});
+                
+                pdfCanvas.height = viewport.height;
+                pdfCanvas.width = viewport.width;
+                
+                const renderContext = {
+                    canvasContext: pdfContext,
+                    viewport: viewport
+                };
+                
+                page.render(renderContext).promise.then(function() {
+                    // Redessiner les overlays après le rendu
+                    if (currentResults.length > 0) {
+                        displayPDFOverlays(currentResults);
+                    }
                 });
             });
+        }
+        
+        function updateZoomDisplay() {
+            $('#zoomLevel').text(`${Math.round(currentScale * 100)}%`);
+        }
+        
+        function updatePageControls() {
+            $('#pageInfo').text(`Page ${currentPage} / ${totalPages}`);
+            $('#prevPage').prop('disabled', currentPage <= 1);
+            $('#nextPage').prop('disabled', currentPage >= totalPages);
         }
         
         function updateAnalyzeButton() {
@@ -583,27 +774,27 @@
                 {
                     type: 'Date de chargement',
                     value: '15/03/2024',
-                    coordinates: { x: 150, y: 100, width: 120, height: 25 }
+                    coordinates: { x: 120, y: 150, width: 100, height: 20 }
                 },
                 {
                     type: 'Lieu de chargement',
                     value: 'Entrepôt Lyon Nord',
-                    coordinates: { x: 100, y: 150, width: 200, height: 30 }
+                    coordinates: { x: 80, y: 200, width: 180, height: 25 }
                 },
                 {
                     type: 'Transporteur',
                     value: 'TRANSPORT SAVOIE SAS',
-                    coordinates: { x: 80, y: 200, width: 250, height: 25 }
+                    coordinates: { x: 300, y: 100, width: 200, height: 20 }
                 },
                 {
                     type: 'Numéro de commande',
                     value: 'CMD-2024-001547',
-                    coordinates: { x: 300, y: 80, width: 180, height: 20 }
+                    coordinates: { x: 400, y: 250, width: 150, height: 18 }
                 },
                 {
                     type: 'Poids total',
                     value: '1,850 kg',
-                    coordinates: { x: 200, y: 250, width: 100, height: 25 }
+                    coordinates: { x: 150, y: 300, width: 80, height: 20 }
                 }
             ];
             
@@ -639,13 +830,50 @@
             });
             
             // Afficher les overlays sur la prévisualisation
-            displayOverlays(results);
+            if (selectedFile && selectedFile.type === 'application/pdf') {
+                displayPDFOverlays(results);
+            } else {
+                displayImageOverlays(results);
+            }
             
             // Ajouter les événements de survol
             setupHoverEvents();
         }
         
-        function displayOverlays(results) {
+        function displayPDFOverlays(results) {
+            // Supprimer les overlays existants
+            $('.info-overlay').remove();
+            
+            const pageContainer = $('#pdfPageContainer');
+            if (pageContainer.length === 0) return;
+            
+            results.forEach((result, index) => {
+                if (result.coordinates) {
+                    // Ajuster les coordonnées selon le scale actuel
+                    const scaledCoords = {
+                        x: result.coordinates.x * currentScale,
+                        y: result.coordinates.y * currentScale,
+                        width: result.coordinates.width * currentScale,
+                        height: result.coordinates.height * currentScale
+                    };
+                    
+                    const overlay = $(`
+                        <div class="info-overlay" data-index="${index}" style="
+                            left: ${scaledCoords.x}px;
+                            top: ${scaledCoords.y}px;
+                            width: ${scaledCoords.width}px;
+                            height: ${scaledCoords.height}px;
+                        ">
+                            <div class="info-overlay-label">${result.type}</div>
+                        </div>
+                    `);
+                    
+                    pageContainer.append(overlay);
+                }
+            });
+        }
+        
+        function displayImageOverlays(results) {
             // Supprimer les overlays existants
             $('.info-overlay').remove();
             
@@ -660,7 +888,9 @@
                             top: ${result.coordinates.y}px;
                             width: ${result.coordinates.width}px;
                             height: ${result.coordinates.height}px;
-                        "></div>
+                        ">
+                            <div class="info-overlay-label">${result.type}</div>
+                        </div>
                     `);
                     
                     previewContainer.append(overlay);
@@ -683,13 +913,13 @@
             });
             
             // Survol des overlays
-            $('.info-overlay').on('mouseenter', function() {
+            $(document).on('mouseenter', '.info-overlay', function() {
                 const index = $(this).data('index');
                 $(this).addClass('highlighted');
                 $(`.result-item[data-index="${index}"]`).addClass('highlighted');
             });
             
-            $('.info-overlay').on('mouseleave', function() {
+            $(document).on('mouseleave', '.info-overlay', function() {
                 const index = $(this).data('index');
                 $(this).removeClass('highlighted');
                 $(`.result-item[data-index="${index}"]`).removeClass('highlighted');
