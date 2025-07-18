@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analyse de Documents de Transport</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        /* Styles pour la mise en page et les composants */
+        body, html {
+            height: 100%;
+            overflow: hidden; /* Empêche le défilement global */
+        }
+        .main-container {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .main-row {
+            flex-grow: 1;
+            min-height: 0; /* Important pour que les conteneurs internes puissent défiler */
+        }
+        .card {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        .card-body {
+            overflow-y: auto; /* Active le défilement si le contenu dépasse */
+            flex-grow: 1;
+        }
+        #preview-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+        }
+        #preview-canvas, #preview-image {
+            max-width: 100%;
+            height: auto;
+        }
+        /* Style pour les cadres de délimitation (bounding box) */
+        .bounding-box {
+            position: absolute;
+            border: 2px solid rgba(255, 0, 0, 0.7);
+            background-color: rgba(255, 0, 0, 0.1);
+            transition: all 0.2s ease-in-out;
+            cursor: pointer;
+        }
+        /* Style pour la mise en surbrillance */
+        .highlight {
+            background-color: rgba(0, 123, 255, 0.2);
+            border: 2px solid rgba(0, 123, 255, 1);
+        }
+        #results-list .list-group-item.highlight {
+            background-color: #e7f3ff; /* Bleu clair pour le texte surligné */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container-fluid main-container p-3">
+        <div class="row g-3 main-row">
+            <div class="col-12 col-lg-6 d-flex flex-column">
+                <div class="card mb-3">
+                    <div class="card-header fw-bold">
+                        📝 Prompt
+                    </div>
+                    <div class="card-body">
+                        <textarea id="prompt-input" class="form-control h-100" placeholder="Saisissez votre instruction ici. Par exemple : 'Extrais le nom du transporteur et la date de livraison.'"></textarea>
+                    </div>
+                </div>
+                <div class="card flex-grow-1">
+                    <div class="card-header fw-bold">
+                        📄 Prévisualisation du document
+                    </div>
+                    <div class="card-body p-0 d-flex justify-content-center align-items-center bg-light">
+                        <div id="preview-container">
+                             <span class="text-muted">Veuillez charger un fichier</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-lg-6 d-flex flex-column">
+                <div class="card mb-3">
+                    <div class="card-header fw-bold">
+                        📤 Téléversement
+                    </div>
+                    <div class="card-body">
+                        <label for="file-upload" class="form-label">Fichier PDF ou Image</label>
+                        <input class="form-control" type="file" id="file-upload" accept="application/pdf,image/*">
+                        <div class="d-grid mt-3">
+                            <button id="analyze-btn" class="btn btn-primary" disabled>
+                                <span id="spinner" class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="display: none;"></span>
+                                Analyser
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card flex-grow-1">
+                    <div class="card-header fw-bold">
+                        ✨ Résultats de l'analyse
+                    </div>
+                    <div class="card-body">
+                        <div id="results-list" class="list-group">
+                            <span class="text-muted">Les résultats de l'analyse apparaîtront ici.</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://mozilla.github.io/pdf.js/build/pdf.mjs" type="module"></script>
+
+    <script type="module">
+        // Import PDF.js
+        const { pdfjsLib } = globalThis;
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://mozilla.github.io/pdf.js/build/pdf.worker.mjs`;
+
+        let uploadedFile = null;
+        let originalWidth = 0;
+        let originalHeight = 0;
+
+        const fileInput = $('#file-upload');
+        const analyzeBtn = $('#analyze-btn');
+        const previewContainer = $('#preview-container');
+        const resultsList = $('#results-list');
+        const promptInput = $('#prompt-input');
+        const spinner = $('#spinner');
+
+        // Gère le changement de fichier
+        fileInput.on('change', function(event) {
+            if (event.target.files.length === 0) {
+                uploadedFile = null;
+                analyzeBtn.prop('disabled', true);
+                return;
+            }
+            uploadedFile = event.target.files[0];
+            analyzeBtn.prop('disabled', false);
+            clearResults();
+            
+            if (uploadedFile.type.startsWith('image/')) {
+                renderImage(uploadedFile);
+            } else if (uploadedFile.type === 'application/pdf') {
+                renderPdf(uploadedFile);
+            }
+        });
+        
+        // Affiche la prévisualisation d'une image
+        function renderImage(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                previewContainer.html(`<img id="preview-image" src="${e.target.result}" />`);
+                const img = new Image();
+                img.onload = function() {
+                    originalWidth = this.naturalWidth;
+                    originalHeight = this.naturalHeight;
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Affiche la prévisualisation d'un PDF
+        async function renderPdf(file) {
+            const fileReader = new FileReader();
+            fileReader.onload = async function() {
+                const typedarray = new Uint8Array(this.result);
+                previewContainer.html('<canvas id="preview-canvas"></canvas>');
+                const canvas = $('#preview-canvas')[0];
+                const context = canvas.getContext('2d');
+                
+                const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
+                const page = await pdf.getPage(1); // On affiche la première page
+                
+                const viewport = page.getViewport({ scale: 1.5 });
+                originalWidth = viewport.width;
+                originalHeight = viewport.height;
+                
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                
+                await page.render({ canvasContext: context, viewport: viewport }).promise;
+            };
+            fileReader.readAsArrayBuffer(file);
+        }
+
+        // Convertit un fichier en Base64
+        function toBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result.split(',')[1]); // On enlève le préfixe "data:...;base64,"
+                reader.onerror = error => reject(error);
+            });
+        }
+        
+        // Gère le clic sur le bouton "Analyser"
+        analyzeBtn.on('click', async function() {
+            if (!uploadedFile) {
+                alert("Veuillez d'abord sélectionner un fichier.");
+                return;
+            }
+
+            spinner.show();
+            $(this).prop('disabled', true);
+            clearResults();
+
+            try {
+                const base64Document = await toBase64(uploadedFile);
+                const promptText = promptInput.val();
+                
+                const requestData = {
+                    prompt: promptText,
+                    document: base64Document,
+                };
+
+                // --- SIMULATION DE L'APPEL WEBSERVICE ---
+                // Remplacez cette partie par votre véritable appel `fetch`
+                console.log("Envoi au webservice (simulation) :", JSON.stringify(requestData, null, 2));
+                // URL de votre véritable service OCR
+                // const response = await fetch('YOUR_WEBSERVICE_URL', {
+                //     method: 'POST',
+                //     headers: { 'Content-Type': 'application/json' },
+                //     body: JSON.stringify(requestData)
+                // });
+                // const results = await response.json();
+
+                // Réponse simulée pour la démonstration
+                await new Promise(resolve => setTimeout(resolve, 1500)); // Simule la latence du réseau
+                const mockResults = {
+                  "informations": [
+                    { "type": "Transporteur", "valeur": "GEOFRA", "coordonnees": { "x": 85, "y": 205, "width": 140, "height": 30 } },
+                    { "type": "Date de chargement", "valeur": "14/07/2025", "coordonnees": { "x": 640, "y": 375, "width": 200, "height": 25 } },
+                    { "type": "Lieu de chargement", "valeur": "PARIS", "coordonnees": { "x": 80, "y": 440, "width": 100, "height": 28 } },
+                    { "type": "Lieu de livraison", "valeur": "LYON", "coordonnees": { "x": 80, "y": 580, "width": 85, "height": 28 } }
+                  ]
+                };
+                
+                displayResults(mockResults.informations);
+
+            } catch (error) {
+                console.error("Erreur lors de l'analyse:", error);
+                resultsList.html('<div class="alert alert-danger">Une erreur est survenue.</div>');
+            } finally {
+                spinner.hide();
+                analyzeBtn.prop('disabled', false);
+            }
+        });
+
+        // Affiche les résultats et les cadres
+        function displayResults(informations) {
+            resultsList.empty();
+            
+            if (!informations || informations.length === 0) {
+                resultsList.html('<span class="text-muted">Aucune information trouvée.</span>');
+                return;
+            }
+
+            const previewElement = $('#preview-canvas, #preview-image');
+            if (previewElement.length === 0) return;
+
+            // Calculer les ratios de mise à l'échelle
+            const displayWidth = previewElement.width();
+            const displayHeight = previewElement.height();
+            const scaleX = displayWidth / originalWidth;
+            const scaleY = displayHeight / originalHeight;
+
+            informations.forEach((info, index) => {
+                const resultId = `result-${index}`;
+
+                // 1. Afficher l'information dans la liste de droite
+                const resultItem = $(`
+                    <a href="#" class="list-group-item list-group-item-action" data-id="${resultId}">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">${info.type}</h6>
+                        </div>
+                        <p class="mb-1">${info.valeur}</p>
+                    </a>
+                `);
+                resultsList.append(resultItem);
+
+                // 2. Dessiner le cadre sur la prévisualisation de gauche
+                const coords = info.coordonnees;
+                const boundingBox = $(`<div class="bounding-box" data-id="${resultId}"></div>`);
+                
+                boundingBox.css({
+                    left: `${coords.x * scaleX}px`,
+                    top: `${coords.y * scaleY}px`,
+                    width: `${coords.width * scaleX}px`,
+                    height: `${coords.height * scaleY}px`,
+                });
+                
+                previewContainer.append(boundingBox);
+            });
+        }
+        
+        function clearResults() {
+             resultsList.html('<span class="text-muted">Les résultats de l\'analyse apparaîtront ici.</span>');
+             previewContainer.find('.bounding-box').remove();
+        }
+
+        // Gère la mise en surbrillance interactive
+        function handleHighlight(event) {
+            const id = $(this).data('id');
+            $(`[data-id=${id}]`).toggleClass('highlight');
+        }
+        
+        $('#results-list').on('mouseenter mouseleave', '.list-group-item', handleHighlight);
+        $('#preview-container').on('mouseenter mouseleave', '.bounding-box', handleHighlight);
+
+    </script>
+
+</body>
+</html>
